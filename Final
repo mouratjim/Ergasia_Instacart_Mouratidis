@@ -1,0 +1,255 @@
+import pandas as pd
+
+import gc                         
+gc.enable()
+
+orders = pd.read_csv('../input/instacart-market-basket-analysis/orders.csv')
+order_products_train = pd.read_csv('../input/instacart-market-basket-analysis/order_products__train.csv')
+order_products_prior = pd.read_csv('../input/instacart-market-basket-analysis/order_products__prior.csv')
+products = pd.read_csv('../input/instacart-market-basket-analysis/products.csv')
+aisles = pd.read_csv('../input/instacart-market-basket-analysis/aisles.csv')
+departments = pd.read_csv('../input/instacart-market-basket-analysis/departments.csv')
+
+aisles['aisle'] = aisles['aisle'].astype('category')
+departments['department'] = departments['department'].astype('category')
+orders['eval_set'] = orders['eval_set'].astype('category')
+products['product_name'] = products['product_name'].astype('category')
+
+op = orders.merge(order_products_prior, on='order_id', how='inner')
+op.head()
+
+user = op.groupby('user_id')['order_number'].max().to_frame('user_t_orders') #
+user.head()
+
+product_avg_position = op.groupby('product_id')[['add_to_cart_order']].mean()
+product_avg_position.columns = ['add_to_cart_mean']
+product_avg_position = product_avg_position.reset_index()
+product_avg_position.head()
+
+reorprob = op.groupby('product_id').filter(lambda x: x.shape[0] >40)
+p_reorprob_results = reorprob.groupby('product_id')['reordered'].mean().to_frame('p_reorder_ratio')
+p_reorprob_results = p_reorprob_results.reset_index()
+p_reorprob_results.head()
+
+up_reorprob_results = reorprob.groupby(['user_id', 'product_id'])['reordered'].mean().to_frame('up_reorder_ratio')
+up_reorprob_results = up_reorprob_results.reset_index()
+up_reorprob_results.head()
+
+reorprob_results = up_reorprob_results.merge(p_reorprob_results, on='product_id', how='left')
+reorprob_results.head()
+
+del [reorprob, p_reorprob_results, up_reorprob_results, ]
+gc.collect()
+
+user = user.reset_index()
+user.head()
+
+prd = op.groupby('product_id')['order_id'].count().to_frame('prd_t_purchases') #
+prd.head()
+
+prd = prd.reset_index()
+prd.head()
+
+uxp = op.groupby(['user_id', 'product_id'])['order_id'].count().to_frame('uxp_t_bought') #
+uxp.head()
+
+uxp = uxp.reset_index()
+uxp.head()
+
+first_order_no = op.groupby(['user_id', 'product_id'])['order_number'].min().to_frame('first_order_number')
+first_order_no  = first_order_no.reset_index()
+first_order_no.head()
+
+span = user.merge(first_order_no, on='user_id', how='right')
+span['Order_Range_D'] = span.user_t_orders - span.first_order_number + 1
+span.head()
+
+uxp_ratio = uxp.merge(span, on=['user_id', 'product_id'], how='left')
+uxp_ratio['uxp_reorder_ratio'] = uxp_ratio.uxp_t_bought / uxp_ratio.Order_Range_D
+uxp_ratio = uxp_ratio.drop(['uxp_t_bought', 'user_t_orders', 'first_order_number', 'Order_Range_D'], axis=1)
+uxp_ratio.head()
+
+del [first_order_no, span]
+gc.collect()
+
+uxp = uxp.merge(uxp_ratio, on=['user_id', 'product_id'])
+uxp.head()
+
+del uxp_ratio
+gc.collect()
+
+op['order_number_back'] = op.groupby('user_id')['order_number'].transform(max) - op.order_number +1 
+op.head(15)
+
+op5 = op[op.order_number_back <= 5]
+op5.head(15)
+
+reorprob5 = op5.groupby('product_id').filter(lambda x: x.shape[0] >40)
+up_reorprob_results5 = reorprob5.groupby(['user_id', 'product_id'])['reordered'].mean().to_frame('up_reorder_ratio5')
+up_reorprob_results5 = up_reorprob_results5.reset_index()
+up_reorprob_results5.head()
+
+del op
+gc.collect()
+
+last_five = op5.groupby(['user_id','product_id'])[['order_id']].count()
+last_five.columns = ['times_last5']
+last_five.head(10)
+
+uxp = uxp.merge(last_five, on=['user_id', 'product_id'], how='left')
+uxp.head(15)
+
+uxp = uxp.merge(up_reorprob_results5, on=['user_id', 'product_id'], how='left')
+uxp.head()
+
+del [op5, last_five, up_reorprob_results5, reorprob5]
+gc.collect()
+
+data = uxp.merge(user, on='user_id', how='left')
+data.head()
+
+data = data.merge(prd, on='product_id', how='left') #
+data.head()
+
+data = data.merge(product_avg_position, on='product_id', how='left')
+data.head()
+
+del [uxp, user, prd, product_avg_position]
+gc.collect()
+
+data = data.merge(reorprob_results, on=['user_id', 'product_id'], how='left')
+data.head()
+
+del reorprob_results
+gc.collect()
+
+orders_future = orders[((orders.eval_set=='train') | (orders.eval_set=='test'))]
+orders_future = orders_future[ ['user_id', 'eval_set', 'order_id'] ]
+orders_future.head(10)
+
+data = data.merge(orders_future, on='user_id', how='left')
+data.head(10)
+
+del orders_future
+gc.collect()
+
+data_train = data[data.eval_set=='train'] #
+data_train.head()
+
+data_train = data_train.merge(order_products_train[['product_id','order_id', 'reordered']], on=['product_id','order_id'], how='left' )
+data_train.head(15)
+
+data_train['times_last5'] = data_train['times_last5'].fillna(0)
+data_train['up_reorder_ratio5'] = data_train['up_reorder_ratio5'].fillna(0)
+data_train['p_reorder_ratio'] = data_train['p_reorder_ratio'].fillna(0)
+data_train['up_reorder_ratio'] = data_train['up_reorder_ratio'].fillna(0)
+#data_train['u_reordered_ratio'] = data_train['u_reordered_ratio'].fillna(0)
+data_train['reordered'] = data_train['reordered'].fillna(0)
+data_train.head(15)
+
+data_train = data_train.set_index(['user_id', 'product_id'])
+data_train.head(15)
+
+data_train = data_train.drop(['eval_set', 'order_id'], axis=1)
+data_train.head(15)
+
+data_test = data[data.eval_set=='test'] #
+data_test.head()
+
+data_test = data_test.set_index(['user_id', 'product_id']) #
+data_test.head()
+
+data_test = data_test.drop(['eval_set','order_id'], axis=1)
+data_test.head()
+
+data_test['times_last5'] = data_test['times_last5'].fillna(0)
+data_test['p_reorder_ratio'] = data_test['p_reorder_ratio'].fillna(0)
+data_test['up_reorder_ratio'] = data_test['up_reorder_ratio'].fillna(0)
+data_test['up_reorder_ratio5'] = data_test['up_reorder_ratio5'].fillna(0)
+data_test.head()
+
+from sklearn.ensemble import RandomForestClassifier
+X_train, y_train = data_train.drop('reordered', axis=1), data_train.reordered
+rfc = RandomForestClassifier(n_estimators=200, max_depth=6, n_jobs=-1, random_state=50)
+model = rfc.fit(X_train, y_train)
+feature_importances_df = pd.DataFrame(model.feature_importances_, index = X_train.columns, columns=['importance']).sort_values('importance',ascending=False)
+print(feature_importances_df)
+feat_importances = pd.Series(model.feature_importances_, index=X_train.columns).sort_values()
+feat_importances.plot(kind='barh')
+del[X_train, y_train]
+gc.collect()
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import BaggingClassifier
+X_train, y_train = data_train.drop('reordered', axis=1), data_train.reordered
+lr = LogisticRegression(random_state=42, solver='lbfgs')
+bagging_lr = BaggingClassifier(base_estimator=lr, n_estimators=20)
+model = bagging_lr.fit(X_train, y_train)
+del[X_train, y_train]
+gc.collect
+
+from sklearn.linear_model import RidgeClassifier
+from sklearn.ensemble import VotingClassifier
+import xgboost as xgb
+X_train, y_train = data_train.drop('reordered', axis=1), data_train.reordered
+rc = RidgeClassifier()
+parameters = {'eval_metric':'logloss', 'max_depth':'5', 'colsample_bytree':'0.4', 'subsample':'0.75'}
+xgbc = xgb.XGBClassifier(objective='binary:logistic', parameters=parameters, num_boost_round=10)
+classifiers1 = [('Logistic Regression', bagging_lr), ('Random Forest Tree', rfc), ('XGBClassifier', xgbc)]
+classifiers2 = [('Logistic Regression', bagging_lr), ('Random Forest Tree', rfc), ('XGBClassifier', xgbc), ('RidgeClassifier', rc)]
+vc1 = VotingClassifier(estimators=classifiers1, voting='soft')
+vc2 = VotingClassifier(estimators=classifiers2)
+model1 = vc1.fit(X_train, y_train)
+model2 = vc2.fit(X_train, y_train)
+del [X_train, y_train]
+gc.collect()
+
+test_pred = model2.predict(data_test).astype(int)
+test_pred[0:20]
+
+test_pred = (model1.predict_proba(data_test)[:,1] >= 0.21).astype(int)
+test_pred[0:20]
+
+data_test['prediction'] = test_pred
+data_test.head(20)
+
+final = data_test.reset_index()
+final = final[['product_id', 'user_id', 'prediction']]
+gc.collect()
+final.head()
+
+orders_test = orders.loc[orders.eval_set=='test',("user_id", "order_id") ]
+orders_test.head()
+
+final = final.merge(orders_test, on='user_id', how='left')
+final.head()
+
+final = final.drop('user_id', axis=1)
+final['product_id'] = final.product_id.astype(int)
+del orders
+del orders_test
+gc.collect()
+final.head()
+
+d = dict()
+for row in final.itertuples():
+    if row.prediction== 1:
+        try:
+            d[row.order_id] += ' ' + str(row.product_id)
+        except:
+            d[row.order_id] = str(row.product_id)
+
+for order in final.order_id:
+    if order not in d:
+        d[order] = 'None'
+        
+gc.collect()
+
+sub = pd.DataFrame.from_dict(d, orient='index')
+sub.reset_index(inplace=True)
+sub.columns = ['order_id', 'products']
+sub.head()
+
+sub.shape[0]
+
+sub.to_csv('sub.csv', index=False)
